@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Good Pubhealth Boy",
+  "description": "西南医科大学虚拟实验平台自动登录、课程答案查看与成绩提交。",
+  "version": "0.7.0",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://virlab.swmu.edu.cn/*"],
+  "action": {
+    "default_title": "Good Pubhealth Boy",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://virlab.swmu.edu.cn/mengoo/*"],
+      "js": ["content.js", "answers.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://virlab.swmu.edu.cn/mzl/*"],
+      "js": ["mark-choices.js", "submit-score.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ]
+}
