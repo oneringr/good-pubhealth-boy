@@ -94,10 +94,16 @@
       #submit-dialog header { cursor: default; }
       #submit-dialog form { display: grid; gap: 8px; padding: 18px; }
       #submit-dialog label { font-weight: 600; }
-      #submit-dialog input, #submit-dialog select { width: 100%; min-height: 40px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1f2937; font: inherit; }
+      #submit-dialog input:not([type="checkbox"]), #submit-dialog select { width: 100%; min-height: 40px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1f2937; font: inherit; }
+      #submit-dialog input[type="checkbox"] { width: 16px; height: 16px; margin: 0 5px 0 0; vertical-align: -2px; accent-color: #dc2626; }
+      .submit-section { display: grid; gap: 8px; padding: 10px 0; border-top: 1px solid #e2e8f0; }
+      .submit-section[hidden] { display: none; }
+      .submit-section small, #submit-progress-unavailable { color: #64748b; font-size: 12px; }
+      .submit-section input:disabled, .submit-section select:disabled { background: #f1f5f9 !important; }
       #submit-course { margin: 0 0 5px; color: #475569; }
       #submit-title-row { display: grid; gap: 8px; }
       #submit-title-row[hidden] { display: none; }
+      #submit-progress-unavailable[hidden] { display: none; }
       #submit-status { min-height: 21px; margin: 3px 0; color: #475569; }
       #submit-status.error { color: #b91c1c; }
       #submit-button { min-height: 42px; border: 0; border-radius: 8px; color: #fff; font-weight: 600; }
@@ -115,20 +121,30 @@
     </section>
     <div id="submit-overlay" hidden>
       <section id="submit-dialog" role="dialog" aria-modal="true" aria-labelledby="submit-heading">
-        <header><h2 id="submit-heading">直接提交成绩</h2><button id="submit-close" type="button" aria-label="关闭提交窗口">×</button></header>
+        <header><h2 id="submit-heading">直接提交</h2><button id="submit-close" type="button" aria-label="关闭提交窗口">×</button></header>
         <form id="submit-form">
           <p id="submit-course">正在读取当前实验…</p>
-          <div id="submit-title-row" hidden><label for="submit-title">实验项目</label><select id="submit-title" required></select></div>
-          <label for="submit-score">成绩（0–100）</label>
-          <input id="submit-score" type="number" min="0" max="100" step="1" required />
-          <label for="submit-minutes">用时（分钟）</label>
-          <input id="submit-minutes" type="number" min="0.1" max="1440" step="0.1" required />
+          <div id="submit-score-section" class="submit-section" hidden>
+            <label><input id="submit-score-enabled" type="checkbox" checked /> 提交成绩和用时</label>
+            <div id="submit-title-row" hidden><label for="submit-title">实验项目</label><select id="submit-title"></select></div>
+            <label for="submit-score">成绩（0–100）</label>
+            <input id="submit-score" type="number" min="0" max="100" step="1" />
+            <label for="submit-minutes">用时（分钟）</label>
+            <input id="submit-minutes" type="number" min="0.1" max="1440" step="0.1" />
+          </div>
+          <div id="submit-progress-section" class="submit-section" hidden>
+            <label><input id="submit-progress-enabled" type="checkbox" checked /> 提交课件进度</label>
+            <label for="submit-progress">进度（0–100%）</label>
+            <input id="submit-progress" type="number" min="0" max="100" step="1" />
+            <small>课件进度保存后，页面的“学习进度”可能不会同步变化。</small>
+          </div>
+          <p id="submit-progress-unavailable" hidden>当前课件未提供进度提交接口。</p>
           <p id="submit-status" role="status" aria-live="polite"></p>
-          <button id="submit-button" type="submit" disabled>提交成绩</button>
+          <button id="submit-button" type="submit" disabled>提交所选数据</button>
         </form>
       </section>
     </div>
-    <div id="actions"><button id="submit-trigger" type="button" title="直接提交成绩" aria-label="直接提交成绩" aria-haspopup="dialog">
+    <div id="actions"><button id="submit-trigger" type="button" title="直接提交" aria-label="直接提交" aria-haspopup="dialog">
       <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 20V4M5 11l7-7 7 7"></path>
       </svg>
@@ -220,6 +236,7 @@
       loadingAnswers = null;
       submissionInfo = null;
       loadingSubmissionInfo = null;
+      if (pendingSubmission) clearTimeout(pendingSubmission.timeout);
       pendingSubmission = null;
     }
   }
@@ -299,8 +316,9 @@
         if (title && !titles.includes(title)) titles.push(title);
       }
     }
-    if (!titles.length) throw new Error('当前课程没有可用的成绩提交项目。');
-    return { courseTitle, titles, packagePath: baseUrl.pathname };
+    const supportsProgress = sources.some((source) => source.includes('/api/open/ProcessUpload'));
+    if (!titles.length && !supportsProgress) throw new Error('当前课程没有可用的提交接口。');
+    return { courseTitle, titles, supportsProgress, packagePath: baseUrl.pathname };
   }
 
   function parseQuestions(source) {
@@ -570,6 +588,20 @@
     }
   }
 
+  function updateSubmissionFields() {
+    const scoreEnabled = Boolean(submissionInfo?.titles.length && shadow.querySelector('#submit-score-enabled').checked);
+    const progressEnabled = Boolean(submissionInfo?.supportsProgress && shadow.querySelector('#submit-progress-enabled').checked);
+    for (const id of ['submit-title', 'submit-score', 'submit-minutes']) {
+      shadow.querySelector(`#${id}`).disabled = !scoreEnabled;
+    }
+    shadow.querySelector('#submit-title').required = scoreEnabled && submissionInfo.titles.length > 1;
+    shadow.querySelector('#submit-score').required = scoreEnabled;
+    shadow.querySelector('#submit-minutes').required = scoreEnabled;
+    shadow.querySelector('#submit-progress').disabled = !progressEnabled;
+    shadow.querySelector('#submit-progress').required = progressEnabled;
+    submitButton.disabled = Boolean(pendingSubmission) || !(scoreEnabled || progressEnabled);
+  }
+
   function renderSubmissionInfo(info) {
     shadow.querySelector('#submit-course').textContent = `课程：${info.courseTitle}`;
     const select = shadow.querySelector('#submit-title');
@@ -577,7 +609,12 @@
     if (info.titles.length > 1) select.add(new Option('请选择实验项目', ''));
     for (const title of info.titles) select.add(new Option(title, title));
     shadow.querySelector('#submit-title-row').hidden = info.titles.length === 1;
-    submitButton.disabled = Boolean(pendingSubmission);
+    shadow.querySelector('#submit-score-section').hidden = !info.titles.length;
+    shadow.querySelector('#submit-progress-section').hidden = !info.supportsProgress;
+    shadow.querySelector('#submit-progress-unavailable').hidden = info.supportsProgress;
+    shadow.querySelector('#submit-score-enabled').checked = Boolean(info.titles.length);
+    shadow.querySelector('#submit-progress-enabled').checked = info.supportsProgress;
+    updateSubmissionFields();
     showSubmitStatus('');
   }
 
@@ -588,6 +625,9 @@
     submitButton.disabled = true;
     shadow.querySelector('#submit-course').textContent = '正在读取当前实验…';
     shadow.querySelector('#submit-title-row').hidden = true;
+    shadow.querySelector('#submit-score-section').hidden = true;
+    shadow.querySelector('#submit-progress-section').hidden = true;
+    shadow.querySelector('#submit-progress-unavailable').hidden = true;
     showSubmitStatus('');
     shadow.querySelector('#submit-score').focus();
     if (submissionInfo) {
@@ -613,15 +653,30 @@
   submitForm.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!submissionInfo || pendingSubmission || !submitForm.reportValidity()) return;
-    const score = shadow.querySelector('#submit-score').valueAsNumber;
-    const minutes = shadow.querySelector('#submit-minutes').valueAsNumber;
-    const title = shadow.querySelector('#submit-title').value;
-    const durationSeconds = Math.round(minutes * 60);
-    if (!Number.isInteger(score) || score < 0 || score > 100 ||
-        !Number.isFinite(minutes) || durationSeconds < 1 || durationSeconds > 86400 ||
-        !submissionInfo.titles.includes(title)) {
-      showSubmitStatus('请填写 0–100 的整数成绩和有效用时，并选择实验项目。', true);
-      return;
+    const scoreEnabled = submissionInfo.titles.length && shadow.querySelector('#submit-score-enabled').checked;
+    const progressEnabled = submissionInfo.supportsProgress && shadow.querySelector('#submit-progress-enabled').checked;
+    if (!scoreEnabled && !progressEnabled) return;
+    let scoreSubmission = null;
+    let progressPercent = null;
+    if (scoreEnabled) {
+      const score = shadow.querySelector('#submit-score').valueAsNumber;
+      const minutes = shadow.querySelector('#submit-minutes').valueAsNumber;
+      const title = shadow.querySelector('#submit-title').value;
+      const durationSeconds = Math.round(minutes * 60);
+      if (!Number.isInteger(score) || score < 0 || score > 100 ||
+          !Number.isFinite(minutes) || durationSeconds < 1 || durationSeconds > 86400 ||
+          !submissionInfo.titles.includes(title)) {
+        showSubmitStatus('请填写 0–100 的整数成绩和有效用时，并选择实验项目。', true);
+        return;
+      }
+      scoreSubmission = { title, score, durationSeconds };
+    }
+    if (progressEnabled) {
+      progressPercent = shadow.querySelector('#submit-progress').valueAsNumber;
+      if (!Number.isInteger(progressPercent) || progressPercent < 0 || progressPercent > 100) {
+        showSubmitStatus('请填写 0–100 的整数进度。', true);
+        return;
+      }
     }
     const target = courseFrameWindow();
     if (!target) {
@@ -634,22 +689,24 @@
       timeout: setTimeout(() => {
         if (pendingSubmission?.requestId !== requestId) return;
         pendingSubmission = null;
-        submitButton.disabled = false;
-        showSubmitStatus('未收到动画的提交回执，请先查看成绩记录，再决定是否重试。', true);
-      }, 8000),
+        updateSubmissionFields();
+        showSubmitStatus('未收到课程的提交回执，请先查看记录，再决定是否重试。', true);
+      }, 20000),
     };
     submitButton.disabled = true;
-    showSubmitStatus('正在向课程发送成绩…');
+    showSubmitStatus('正在向课程提交所选数据…');
     target.postMessage({
       source: 'good-pubhealth-boy',
-      type: 'submitScore',
+      type: 'submitData',
       requestId,
       packagePath: submissionInfo.packagePath,
-      title,
-      score,
-      durationSeconds,
+      scoreSubmission,
+      progressPercent,
     }, location.origin);
   });
+
+  shadow.querySelector('#submit-score-enabled').addEventListener('change', updateSubmissionFields);
+  shadow.querySelector('#submit-progress-enabled').addEventListener('change', updateSubmissionFields);
 
   trigger.addEventListener('click', () => panel.hidden ? openPanel() : closePanel());
   shadow.querySelector('#submit-trigger').addEventListener('click', openSubmitDialog);
@@ -675,10 +732,8 @@
       if (result.requestId !== pendingSubmission?.requestId) return;
       clearTimeout(pendingSubmission.timeout);
       pendingSubmission = null;
-      submitButton.disabled = false;
-      showSubmitStatus(result.ok
-        ? '已发送至平台。请在课程成绩记录中确认结果。'
-        : result.error || '提交失败，请重试。', !result.ok);
+      updateSubmissionFields();
+      showSubmitStatus(result.message || '提交失败，请重试。', !result.ok);
     }
   });
   new MutationObserver(queueVisibilityCheck).observe(document.documentElement, {
