@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Good Pubhealth Boy",
   "description": "西南医科大学虚拟实验平台自动登录、课程答案查看与成绩、课件进度提交。",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "permissions": ["storage", "activeTab"],
   "host_permissions": ["https://virlab.swmu.edu.cn/*"],
   "action": {

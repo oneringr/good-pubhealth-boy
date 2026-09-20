@@ -48,6 +48,7 @@
     if (typeof window.ScoreUpload !== 'function' || typeof window.parent.API?.dataUpload !== 'function') {
       throw new Error('课程尚未准备好成绩上传接口，请稍后重试。');
     }
+    const completesProgress = /\b(?:var|let|const)\s+status\s*=\s*["']1["']/.test(String(window.ScoreUpload));
     const previousStart = localStorage.getItem('startDate');
     try {
       localStorage.setItem('startDate', String(Date.now() - durationSeconds * 1000));
@@ -56,6 +57,7 @@
       if (previousStart === null) localStorage.removeItem('startDate');
       else localStorage.setItem('startDate', previousStart);
     }
+    return completesProgress;
   }
 
   window.addEventListener('message', async (event) => {
@@ -84,8 +86,10 @@
     const errors = [];
     if (score !== null) {
       try {
-        sendScore(score);
-        results.push('成绩已发送，请在成绩记录中确认');
+        const completesProgress = sendScore(score);
+        results.push(completesProgress
+          ? '成绩、用时和完成状态已发送，请在成绩记录及课程介绍页确认'
+          : '成绩已发送，请在成绩记录中确认');
       } catch (error) {
         errors.push(`成绩提交失败：${error?.message || '课程上传接口调用失败'}`);
       }

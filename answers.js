@@ -125,12 +125,13 @@
         <form id="submit-form">
           <p id="submit-course">正在读取当前实验…</p>
           <div id="submit-score-section" class="submit-section" hidden>
-            <label><input id="submit-score-enabled" type="checkbox" checked /> 提交成绩和用时</label>
+            <label><input id="submit-score-enabled" type="checkbox" checked /> <span id="submit-score-label">提交成绩和用时</span></label>
             <div id="submit-title-row" hidden><label for="submit-title">实验项目</label><select id="submit-title"></select></div>
             <label for="submit-score">成绩（0–100）</label>
             <input id="submit-score" type="number" min="0" max="100" step="1" />
             <label for="submit-minutes">用时（分钟）</label>
             <input id="submit-minutes" type="number" min="0.1" max="1440" step="0.1" />
+            <small id="submit-score-progress-note" hidden>课件的成绩请求同时上报“完成”状态。实测同类课件的课程介绍页会显示 100%；请以平台记录为准。</small>
           </div>
           <div id="submit-progress-section" class="submit-section" hidden>
             <label><input id="submit-progress-enabled" type="checkbox" checked /> 提交课件进度</label>
@@ -307,8 +308,13 @@
     const scripts = [...indexHtml.querySelectorAll('script[src]')]
       .map((script) => new URL(script.getAttribute('src'), indexUrl))
       .filter((url) => url.origin === location.origin && url.pathname.startsWith(baseUrl.pathname) &&
-        /\.js$/i.test(url.pathname) && !/\/(?:createjs|jquery|MengooCx)[^/]*\.js$/i.test(url.pathname));
-    const sources = await Promise.all(scripts.map(fetchText));
+        /\.js$/i.test(url.pathname));
+    const courseScripts = scripts.filter((url) => !/\/(?:createjs|jquery|MengooCx)[^/]*\.js$/i.test(url.pathname));
+    const scoreHelpers = scripts.filter((url) => /\/MengooCx[^/]*\.js$/i.test(url.pathname));
+    const [sources, helpers] = await Promise.all([
+      Promise.all(courseScripts.map(fetchText)),
+      Promise.all(scoreHelpers.map(fetchText)),
+    ]);
     const titles = [];
     for (const source of sources) {
       for (const match of source.matchAll(/\bScoreUpload\s*\(\s*(["'])([^"']+)\1\s*,/g)) {
@@ -317,8 +323,10 @@
       }
     }
     const supportsProgress = sources.some((source) => source.includes('/api/open/ProcessUpload'));
+    const scoreCompletesProgress = Boolean(titles.length && helpers.some((source) =>
+      /\bfunction\s+ScoreUpload\s*\([^)]*\)\s*\{[\s\S]{0,350}\b(?:var|let|const)\s+status\s*=\s*["']1["']/.test(source)));
     if (!titles.length && !supportsProgress) throw new Error('当前课程没有可用的提交接口。');
-    return { courseTitle, titles, supportsProgress, packagePath: baseUrl.pathname };
+    return { courseTitle, titles, supportsProgress, scoreCompletesProgress, packagePath: baseUrl.pathname };
   }
 
   function parseQuestions(source) {
@@ -611,7 +619,10 @@
     shadow.querySelector('#submit-title-row').hidden = info.titles.length === 1;
     shadow.querySelector('#submit-score-section').hidden = !info.titles.length;
     shadow.querySelector('#submit-progress-section').hidden = !info.supportsProgress;
-    shadow.querySelector('#submit-progress-unavailable').hidden = info.supportsProgress;
+    shadow.querySelector('#submit-progress-unavailable').hidden = info.supportsProgress || info.scoreCompletesProgress;
+    shadow.querySelector('#submit-score-label').textContent = info.scoreCompletesProgress
+      ? '提交成绩、用时和完成进度' : '提交成绩和用时';
+    shadow.querySelector('#submit-score-progress-note').hidden = !info.scoreCompletesProgress;
     shadow.querySelector('#submit-score-enabled').checked = Boolean(info.titles.length);
     shadow.querySelector('#submit-progress-enabled').checked = info.supportsProgress;
     updateSubmissionFields();
