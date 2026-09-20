@@ -60,7 +60,7 @@
       #trigger:hover { background: #1d4ed8; }
       #submit-trigger, #submit-button { background: #dc2626; }
       #submit-trigger:hover, #submit-button:hover { background: #b91c1c; }
-      #trigger:focus-visible, #submit-trigger:focus-visible, #close:focus-visible, #submit-close:focus-visible, #submit-button:focus-visible {
+      #trigger:focus-visible, #submit-trigger:focus-visible, #close:focus-visible, #submit-close:focus-visible, #submit-button:focus-visible, .raw-toggle:focus-visible {
         outline: 3px solid #f59e0b; outline-offset: 3px;
       }
       #panel {
@@ -85,6 +85,10 @@
       .question { display: block; font-weight: 600; }
       .answer { display: block; margin-top: 4px; color: #1d4ed8; }
       .unknown { color: #64748b; }
+      .raw-toggle { margin-top: 7px; padding: 3px 8px; border: 1px solid #bfdbfe; border-radius: 6px; background: #eff6ff; color: #1d4ed8; font-size: 12px; }
+      .raw-toggle:hover { background: #dbeafe; }
+      .raw-answer { max-height: 280px; margin: 8px 0 0; padding: 10px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; color: #334155; font: 11px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .raw-answer[hidden] { display: none; }
       .options { margin-top: 8px; }
       .option { margin-top: 4px; padding: 5px 8px; border-radius: 7px; background: #f8fafc; color: #475569; font-size: 12px; }
       .option.correct { background: #eff6ff; color: #1d4ed8; font-weight: 600; }
@@ -331,13 +335,16 @@
 
   function parseQuestions(source) {
     const groups = new Map();
+    const rawRows = new Map();
     for (const match of source.matchAll(/\b(?:var|let|const)\s+tigan(\d*)\s*=\s*(\[[\s\S]*?\])\s*;/g)) {
       const rows = JSON.parse(match[2]);
       if (!Array.isArray(rows)) throw new Error('课程题干格式无法识别。');
-      groups.set(match[1] || '1', rows.map((row) => String(row[0] || '未命名题目')));
+      const group = match[1] || '1';
+      groups.set(group, rows.map((row) => String(row[0] || '未命名题目')));
+      rawRows.set(group, rows.map((row) => JSON.stringify(row)));
     }
     if (!groups.size) throw new Error('当前课程没有可识别的题干文件。');
-    return groups;
+    return { groups, rawRows };
   }
 
   function parseInputChecks(frame) {
@@ -439,6 +446,7 @@
 
   function parseAnswerScripts(sources, groups) {
     const answers = new Map();
+    const rawAnswers = new Map();
     const offsets = new Map();
     let offset = 0;
     for (const [group, questions] of groups) {
@@ -453,24 +461,54 @@
       const base = offsets.get(group);
       const frames = [...source.matchAll(/\bthis\.frame_\d+\s*=\s*function\s*\(\)\s*\{/g)];
       for (let i = 0; i < frames.length; i++) {
-        const frame = source.slice(frames[i].index, frames[i + 1]?.index ?? source.length)
+        const originalFrame = source.slice(frames[i].index, frames[i + 1]?.index ?? source.length);
+        const frame = originalFrame
           .replace(/\/\*[\s\S]*?\*\//g, '')
           .replace(/^[ \t]*\/\/.*$/gm, '');
-        const number = frame.match(/\bcurrent_jfnum\s*=\s*(\d+)/);
+        const recordRaw = (localIndex) => {
+          const key = base + localIndex;
+          if (!rawAnswers.has(key)) rawAnswers.set(key, []);
+          const list = rawAnswers.get(key);
+          const frameName = frames[i][0].match(/frame_\d+/)?.[0] || '判分帧';
+          if (list.some((entry) => entry.url === url.pathname && entry.frameName === frameName)) return;
+          const code = originalFrame.trim();
+          list.push({
+            url: url.pathname,
+            frameName,
+            code: code.length > 12000
+              ? `${code.slice(0, 6000)}\n…中间代码已省略…\n${code.slice(-6000)}` : code,
+          });
+        };
+        const number = frame.match(/\bcurrent_jfnum\s*=\s*(\d+)/) ||
+          frame.match(/\bstartsteps\s*\(\s*(\d+)\s*\)/);
         if (number) {
           const localIndex = Number(number[1]);
-          const choice = frame.match(/\bright_arr\s*=\s*(\[[\d,\s]+\])/);
-          if (choice && localIndex < questions.length) {
-            const selected = JSON.parse(choice[1]).flatMap((value, index) => value === 1 ? [index + 1] : []);
-            if (selected.length) answers.set(base + localIndex, `正确选项：第 ${selected.join('、')} 项`);
-          } else if (localIndex < questions.length) {
-            const inputAnswer = parseInputChecks(frame);
-            if (inputAnswer) answers.set(base + localIndex, inputAnswer);
+          if (localIndex < questions.length) {
+            recordRaw(localIndex);
+            let answer = null;
+            const choice = frame.match(/\bright_arr\s*=\s*(\[[\d,\s]+\])/);
+            if (choice) {
+              const selected = JSON.parse(choice[1]).flatMap((value, index) => value === 1 ? [index + 1] : []);
+              if (selected.length) answer = `正确选项：第 ${selected.join('、')} 项`;
+            }
+            const scored = [...frame.matchAll(/\bS\.jf_num(\d+)\s*=\s*1\b/g)]
+              .find((match) => Number(match[1]) === localIndex + 1);
+            if (!answer && scored) {
+              answer = answerFromCondition(enclosingConditions(frame, scored.index), questions[localIndex]);
+            }
+            if (!answer) answer = parseInputChecks(frame);
+            if (!answer && scored) {
+              answer = /完成/.test(questions[localIndex])
+                ? '完成该步骤后自动计分'
+                : '脚本直接赋分，未发现明确的选项或填写值';
+            }
+            if (answer) answers.set(base + localIndex, answer);
           }
         }
         for (const match of frame.matchAll(/\b(jfarr|jf_num)\[(\d+)\]\s*=\s*([1-9]\d*)\s*;?/g)) {
           const localIndex = Number(match[2]) - (match[1] === 'jfarr' ? 1 : 0);
           if (localIndex < 0 || localIndex >= questions.length) continue;
+          recordRaw(localIndex);
           const conditions = enclosingConditions(frame, match.index);
           let answer = answerFromCondition(conditions, questions[localIndex]);
           if (!answer && !conditions.length && /完成实验|完成操作/.test(questions[localIndex])) {
@@ -480,11 +518,14 @@
         }
         if (questions.length === 6 && /\btk_fz\[/.test(frame)) {
           const inputs = parseScoredInputs(frame);
-          if (inputs) answers.set(base + 5, inputs);
+          if (inputs) {
+            recordRaw(5);
+            answers.set(base + 5, inputs);
+          }
         }
       }
     }
-    return answers;
+    return { answers, rawAnswers };
   }
 
   async function readCourseAnswers() {
@@ -504,10 +545,12 @@
       fetchText(questionUrl),
       ...answerUrls.map(fetchText),
     ]);
-    const groups = parseQuestions(questionSource);
+    const { groups, rawRows } = parseQuestions(questionSource);
     const questions = [...groups].flatMap(([group, rows]) => rows.map((text) =>
       groups.size === 1 ? text : `第 ${group} 部分 · ${text}`));
-    const answers = parseAnswerScripts(answerSources.map((source, index) => ({ url: answerUrls[index], source })), groups);
+    const questionRows = [...groups.keys()].flatMap((group) => rawRows.get(group));
+    const { answers, rawAnswers } = parseAnswerScripts(
+      answerSources.map((source, index) => ({ url: answerUrls[index], source })), groups);
     const options = optionCatalog[baseUrl.pathname] || [];
     const selections = {};
     const groupOffsets = {};
@@ -521,7 +564,7 @@
       });
       offset += rows.length;
     }
-    return { title, questions, answers, options, selections, groupOffsets, packagePath: baseUrl.pathname };
+    return { title, questions, questionRows, answers, rawAnswers, options, selections, groupOffsets, packagePath: baseUrl.pathname };
   }
 
   function selectedOptionNumbers(answer) {
@@ -532,9 +575,9 @@
   function renderAnswers(data) {
     shadow.querySelector('#course-title').textContent = data.title;
     shadow.querySelector('#summary').textContent =
-      `已识别 ${data.answers.size} / ${data.questions.length} 道题的答案`;
+      `已提取 ${data.answers.size} / ${data.questions.length} 道题的答案或判分信息`;
     shadow.querySelector('#note').textContent =
-      '选项序号从 1 开始，按动画内部顺序编号；填空显示判分值，操作题显示计分条件。';
+      '选项序号从 1 开始，按动画内部顺序编号；点击“显示原始答案”可查看对应的课件判分代码。';
     showStatus('');
     answerList.replaceChildren();
     data.questions.forEach((question, index) => {
@@ -550,7 +593,26 @@
       answer.textContent = selected.length && choices
         ? `${rawAnswer}（${selected.map((number) => String.fromCharCode(64 + number)).join('、')}）`
         : rawAnswer || '暂未识别到答案';
-      item.append(title, answer);
+      const rawToggle = document.createElement('button');
+      rawToggle.type = 'button';
+      rawToggle.className = 'raw-toggle';
+      rawToggle.textContent = '显示原始答案';
+      rawToggle.setAttribute('aria-expanded', 'false');
+      const rawCode = document.createElement('pre');
+      rawCode.className = 'raw-answer';
+      rawCode.id = `gpbb-raw-${index}`;
+      rawCode.hidden = true;
+      rawToggle.setAttribute('aria-controls', rawCode.id);
+      const fragments = data.rawAnswers.get(index) || [];
+      rawCode.textContent = fragments.length
+        ? fragments.map(({ url, frameName, code }) => `来源：${url} · ${frameName}\n${code}`).join('\n\n')
+        : `未定位到该题对应的判分代码。\n题干原始记录：${data.questionRows[index]}`;
+      rawToggle.addEventListener('click', () => {
+        rawCode.hidden = !rawCode.hidden;
+        rawToggle.textContent = rawCode.hidden ? '显示原始答案' : '隐藏原始答案';
+        rawToggle.setAttribute('aria-expanded', String(!rawCode.hidden));
+      });
+      item.append(title, answer, rawToggle, rawCode);
       if (choices?.length) {
         const options = document.createElement('div');
         options.className = 'options';
